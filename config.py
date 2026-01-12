@@ -1,17 +1,17 @@
-
+import logging
 import os
 from dataclasses import dataclass
 from typing import Dict, Any
 
 
-
+logger = logging.getLogger(__name__)
 
 @dataclass
 class Neo4jConfig:
     """Neo4j数据库配置信息"""
-    uri:str # 数据库URI
-    user:str # 数据库用户名
-    password:str # 数据库密码
+    uri:str = os.getenv("NEO4J_URI", "localhost") # 数据库URI
+    user:str = os.getenv("NEO4J_USER", "neo4j") # 数据库用户名
+    password:str = os.getenv("NEO4J_PASSWORD", "") # 数据库密码
     driver:None ="" # Neo4j驱动
     database:str = "neo4j" # 数据库名称
 
@@ -35,11 +35,13 @@ class LLMConfig:
     temperature: float = os.getenv("LLM_TEMPERATURE", 0.1) or 0.1
     top_k: int = os.getenv("LLM_TOP_K", 3) or 3
 
-@dataclass
+
 class GraphRAGConfig:
     """GraphRAG系统配置信息"""
     # Neo4j数据库配置
     neo4j_config: Neo4jConfig = Neo4jConfig()
+    logger.debug(f"Neo4j数据库配置: {neo4j_config}")
+
     # Milvus数据库配置
     milvus_config: MilvusConfig = MilvusConfig()
     # LLM配置

@@ -1,3 +1,4 @@
+from modules import GraphIndexingModule
 
 
 class HybridRetrievalModule:
@@ -22,3 +23,4 @@ class HybridRetrievalModule:
 
 
         self.graph_indexing = GraphIndexingModule(config,llm_client)
+        self.graph_indexed = False
