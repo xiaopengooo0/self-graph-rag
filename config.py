@@ -3,6 +3,15 @@ import os
 from dataclasses import dataclass
 from typing import Dict, Any
 
+from dotenv import load_dotenv
+os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
+os.environ["HF_TOKEN"]  ="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"
+os.environ["HF_HOME"] = os.path.join(r"E:\dev\huggingface")
+
+
+# 加载 .env 文件中的环境变量
+load_dotenv()
+
 
 logger = logging.getLogger(__name__)
 
@@ -13,7 +22,7 @@ class Neo4jConfig:
     user:str = os.getenv("NEO4J_USER", "neo4j") # 数据库用户名
     password:str = os.getenv("NEO4J_PASSWORD", "") # 数据库密码
     driver:None ="" # Neo4j驱动
-    database:str = "neo4j" # 数据库名称
+    database:str = os.getenv("NEO4J_DATABASE", "neo4j") # 数据库名称
 
 
 @dataclass
@@ -49,7 +58,7 @@ class GraphRAGConfig:
 
 
     # 向量模型配置
-    embedding_model_name: str = os.getenv("EMBEDDING_MODEL", "BGE-small-zh-v1.5") or "BGE-small-zh-v1.5"
+    embedding_model_name: str = os.getenv("EMBEDDING_MODEL", "BAAI/bge-small-zh-v1.5") or "BAAI/bge-small-zh-v1.5"
 
 
     # 图数据处理配置
@@ -67,6 +76,14 @@ class GraphRAGConfig:
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__
+
+
+# 初始化时加载环境变量
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 
 DEFAULT_CONFIG = GraphRAGConfig()

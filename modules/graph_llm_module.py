@@ -16,6 +16,6 @@ class LLMModule:
                                   base_url = self.config.api_base,
                                   temperature=self.config.temperature or 0.1,
                                   max_tokens=self.config.max_tokens or 2048,
-                                  top_k=self.config.top_k or 3
+                                  # top_k=self.config.top_k or 3
                                   )
         logger.info(f"已初始化LLM模型: {self.config.model_name}")

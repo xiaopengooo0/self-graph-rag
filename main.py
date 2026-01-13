@@ -57,17 +57,19 @@ class AdvanceGraphRAGSystem:
         print("3.初始化LLM模块...")
         self.llm_module = LLMModule(self.config.llm_config)
         # 4. 传统混合检索模块
-        print("初始化传统混合检索...")
+        print("4.初始化传统混合检索...")
         self.traditional_retrieval = HybridRetrievalModule(config = self.config,
                                                            milvus_module=self.index_module,
                                                            data_module= self.data_module,
                                                            llm_client= self.llm_module.client)
 
         #5.图RAG索引模块
+        print("5.初始化图RAG索引模块...")
         self.graph_retrieval = GraphRAGRetrievalModule(config = self.config,
                                                            llm_client= self.llm_module.client)
 
         #6.智能查询路由
+        print("6.初始化智能查询路由...")
         self.query_router = IntelligentQueryRouter(config = self.config,
                                                            llm_client= self.llm_module.client,
                                                            graph_retrieval= self.graph_retrieval,
