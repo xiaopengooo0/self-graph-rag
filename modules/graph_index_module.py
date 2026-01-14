@@ -370,3 +370,15 @@ class GraphIndexingModule:
                 for key in relation_kv.index_keys:
                     self.key_to_relations[key].append(relation_id)
 
+    def get_entities_by_key(self, key):
+        """根据索引键获取实体"""
+        entity_ids = self.key_to_entities.get(key, [])
+        return [self.entity_kv_store[eid] for eid in entity_ids if eid in self.entity_kv_store]
+
+    def get_relations_by_key(self, key: str) -> List[RelationKeyValue]:
+        """根据索引键获取关系"""
+        """根据索引键获取关系"""
+        relation_ids = self.key_to_relations.get(key, [])
+        return [self.relation_kv_store[rid] for rid in relation_ids if rid in self.relation_kv_store]
+
+
