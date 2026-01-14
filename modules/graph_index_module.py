@@ -4,6 +4,8 @@ from collections import defaultdict
 from dataclasses import dataclass
 from typing import Dict, List, Any, Tuple
 
+from langchain_core.documents import Document
+
 logger = logging.getLogger(__name__)
 
 @dataclass
@@ -94,6 +96,10 @@ class GraphIndexingModule:
             self.entity_kv_store[entity_id] = entity_kv
             self.key_to_entities[entity_name].append(entity_id)
 
+        # 打印第一个节点
+        if self.entity_kv_store:
+            logger.info(f"第一个节点: {self.entity_kv_store[list(self.entity_kv_store.keys())[0]]}")
+            logger.info(f"第一个节点属性: {self.entity_kv_store[list(self.entity_kv_store.keys())[0]].metadata}")
 
             # 处理食材实体
         for ingredient in ingredients:
@@ -150,7 +156,7 @@ class GraphIndexingModule:
                 self.entity_kv_store[entity_id] = entity_kv
                 self.key_to_entities[entity_name].append(entity_id)
 
-                logger.info(f"实体键值对创建完成，共 {len(self.entity_kv_store)} 个实体")
+        logger.info(f"实体键值对创建完成，共 {len(self.entity_kv_store)} 个实体")
         return self.entity_kv_store
 
 
@@ -161,7 +167,7 @@ class GraphIndexingModule:
         """
         logger.info("开始创建关系键值对...")
 
-        for i , (source_id, target_id, relation_type) in enumerate(relationships):
+        for i , (source_id, relation_type,target_id) in enumerate(relationships):
             relation_id = f"rel_{i}_{source_id}_{target_id}"
 
             # 获取源节点和目标节点信息
@@ -205,7 +211,16 @@ class GraphIndexingModule:
             for key in index_keys:
                 self.key_to_relations[key].append(relation_id)
 
+
+        # 打印 key_to_relations前三个键值对
+        for key, value in list(self.key_to_relations.items())[:3]:
+            logger.info(f"key_to_relations: {key} -> {value}")
+
         logger.info(f"关系键值对创建完成，共 {len(self.relation_kv_store)} 个关系")
+
+        # 打印第一个关系键值对
+        logger.info(f"第一个关系键值对: {list(self.relation_kv_store.values())[:3]}")
+
         return self.relation_kv_store
 
     def _generate_relation_index_keys(self, source_entity, target_entity, relation_type) -> List[str]:
@@ -240,7 +255,7 @@ class GraphIndexingModule:
             ])
 
         # 使用LLm增强关系索引键
-        if hasattr(self.config,"enable_llm_relation_keys",False):
+        if getattr(self.config, "enable_llm_relation_keys", False):
             enhanced_keys = self._llm_enhance_relation_keys(source_entity, target_entity, relation_type)
             keys.extend(enhanced_keys)
 
@@ -276,3 +291,82 @@ class GraphIndexingModule:
         except Exception as e:
             logger.error(f"LLM增强关系索引键失败: {e}")
             return []
+
+    def deduplicate_entities_and_relations(self):
+        """
+        去重相同的实体和关系，优化图操作
+        """
+
+        logger.info("开始去重相同的实体和关系...")
+        name_to_entities = defaultdict(list)
+        for entity_id,entity_kv in self.entity_kv_store.items():
+            name_to_entities[entity_kv.entity_name].append(entity_id)
+
+        # 合并同名实体
+        entities_to_remove = []
+
+        for name,entity_ids in name_to_entities.items():
+            if len(entity_ids) > 1:
+                # 获取同名实体的属性
+                primary_id = entity_ids[0]
+                primary_entity = self.entity_kv_store[primary_id]
+
+                for entity_id in entity_ids[1:]:
+                    duplicate_entity = self.entity_kv_store[entity_id]
+                    # 合并内容
+                    primary_entity.value_content += f"\n\n补充信息: {duplicate_entity.value_content}"
+                    # 标记删除
+                    entities_to_remove.append(entity_id)
+        # 删除重复的实体
+        for entity_id in entities_to_remove:
+            del self.entity_kv_store[entity_id]
+
+        # 关系去重
+        relation_signature_to_ids = defaultdict(list)
+        for relation_id, relation_kv in self.relation_kv_store.items():
+            signature = f"{relation_kv.source_entity}_{relation_kv.target_entity}_{relation_kv.relation_type}"
+            relation_signature_to_ids[signature].append(relation_id)
+        # 合并重复关系
+        relations_to_remove = []
+        for signature, relation_ids in relation_signature_to_ids.items():
+            if len(relation_ids) > 1:
+                # 保留第一个关系
+                for relation_id in relation_ids[1:]:
+                    relations_to_remove.extend(relation_ids[1:])
+
+        # 删除重复关系
+        for relation_id in relations_to_remove:
+            del self.relation_kv_store[relation_id]
+
+        # 更新关系索引
+        self._rebuild_key_mappings ()
+        logger.info(f"去重完成 - 删除了 {len(entities_to_remove)} 个重复实体，{len(relations_to_remove)} 个重复关系")
+
+    def get_statistics(self):
+        """获取键值对存储统计信息"""
+        return {
+            "total_entities": len(self.entity_kv_store),
+            "total_relations": len(self.relation_kv_store),
+            "total_entity_keys": sum(len(kv.index_keys) for kv in self.entity_kv_store.values()),
+            "total_relation_keys": sum(len(kv.index_keys) for kv in self.relation_kv_store.values()),
+            "entity_types": {
+                "Recipe": len([kv for kv in self.entity_kv_store.values() if kv.entity_type == "Recipe"]),
+                "Ingredient": len([kv for kv in self.entity_kv_store.values() if kv.entity_type == "Ingredient"]),
+                "CookingStep": len([kv for kv in self.entity_kv_store.values() if kv.entity_type == "CookingStep"])
+            }
+        }
+
+    def _rebuild_key_mappings(self):
+            """重建键到实体/关系的映射"""
+            self.key_to_entities.clear()
+            self.key_to_relations.clear()
+
+            # 重建实体映射
+            for entity_id,entity_kv in self.entity_kv_store.items():
+                for key in entity_kv.index_keys:
+                    self.key_to_entities[key].append(entity_id)
+            # 重建关系映射
+            for relation_id,relation_kv in self.relation_kv_store.items():
+                for key in relation_kv.index_keys:
+                    self.key_to_relations[key].append(relation_id)
+

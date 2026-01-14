@@ -4,6 +4,7 @@ from typing import List, Dict, Any
 
 from langchain_core.documents import Document
 from neo4j import GraphDatabase
+from nltk.corpus.reader import documents
 
 from config import Neo4jConfig
 
@@ -64,7 +65,367 @@ class GraphDataModule:
             logger.error(f"连接Neo4j失败: {e}")
             raise
 
+    def load_graph_data(self)->Dict[str, Any]:
+        """
+        从Neo4j加载图数据
 
+        Returns:
+            包含节点和关系的数据字典
+        """
+
+        logger.info("开始从Neo4j加载图数据...")
+
+        with self.neo4j_config.driver .session() as session:
+            # 1.加载所有菜谱节点，从Category关系中读取分类信息
+            recipes_query = """
+            MATCH (r:Recipe)
+            WHERE r.nodeId>='200000000'
+            OPTIONAL MATCH (r)-[:BELONGS_TO_CATEGORY]->(c:Category)
+            WITH r,collect(c.name) as categories 
+            RETURN r.nodeId as nodeId ,labels(r) as labels ,r.name as name,
+                   properties(r) as originalProperties,
+                   CASE WHEN size(categories) > 0
+                        THEN categories[0] 
+                        ELSE COALESCE(r.category, '未知') END as mainCategory,
+                   CASE WHEN size(categories) > 0 
+                        THEN categories 
+                        ELSE [COALESCE(r.category, '未知')] END as allCategories
+            ORDER BY r.nodeId
+            """
+
+            result = session.run(recipes_query)
+
+            self.recipes = []
+            for record in result:
+                properties = dict(record["originalProperties"])
+
+                properties["category"] = record["mainCategory"]
+                properties["all_categories"] = record["allCategories"]
+
+                node = GraphNode(
+                    node_id= record["nodeId"],
+                    labels= record["labels"],
+                    name= record["name"],
+                    properties= properties
+
+                )
+                self.recipes.append(node)
+
+            logger.info(f"成功获取到{len(self.recipes)}个菜谱节点")
+
+            # 2.加载所有食材节点
+            ingredients_query = """
+            MATCH (i:Ingredient) 
+            WHERE i.nodeId >= '200000000'
+            RETURN i.nodeId as nodeId, labels(i) as labels, i.name as name,
+                   properties(i) as properties
+            ORDER BY i.nodeId
+            """
+            result = session.run(ingredients_query)
+
+            self.ingredients = []
+            for record in result:
+                node = GraphNode(
+                    node_id=record["nodeId"],
+                    labels=record["labels"],
+                    name=record["name"],
+                    properties=record["properties"]
+                )
+                self.ingredients.append(node)
+
+            logger.info(f"获取所有食材成功！共有 {len(self.ingredients)} 个食材。")
+
+
+            # 3.加载所有烹饪步骤节点
+            steps_query = """
+            MATCH (s:CookingStep)
+            WHERE s.nodeId >= '200000000'
+            RETURN s.nodeId as nodeId, labels(s) as labels, s.name as name,
+                   properties(s) as properties
+            ORDER BY s.nodeId
+            """
+            result = session.run(steps_query)
+
+            self.cooking_steps = []
+            for record in result:
+                node = GraphNode(
+                    node_id=record["nodeId"],
+                    labels=record["labels"],
+                    name=record["name"],
+                    properties=record["properties"]
+                )
+                self.cooking_steps.append(node)
+
+            logger.info(f"加载了 {len(self.cooking_steps)} 个烹饪步骤节点")
+
+        return {
+            'recipes': len(self.recipes),
+            'ingredients': len(self.ingredients),
+            'cooking_steps': len(self.cooking_steps)
+        }
+
+    def build_recipe_documents(self) -> List[Document]:
+        """
+        构建菜谱文档，集成相关的食材和步骤信息
+
+        Returns:
+            结构化的菜谱文档列表
+        """
+
+        logger.info("开始构建菜谱文档...")
+
+        documents = []
+
+        with self.neo4j_config.driver.session() as session:
+            for recipe in self.recipes:
+                try :
+                    recipe_id = recipe.node_id
+                    recipe_name = recipe.name
+
+                    # 获取菜谱的食材列表
+                    ingredients_query = """
+                    MATCH (r:Recipe {nodeId: $recipe_id})-[req:REQUIRES]->(i:Ingredient)
+                    RETURN i.name as name, i.category as category, 
+                           req.amount as amount, req.unit as unit,
+                           i.description as description
+                    ORDER BY i.name
+                    """
+                    ingredients_result = session.run(ingredients_query, {"recipe_id": recipe_id})
+
+                    ingredients_info = []
+
+                    for ingredient in ingredients_result:
+
+                        amount  = ingredient.get("amount","")
+                        unit = ingredient.get("unit","")
+                        ingredient_text = f"{ingredient.get('name','')}"
+                        if amount and unit:
+                            ingredient_text += f"({amount}{unit})"
+                        if ingredient.get("description"):
+                            ingredient_text += f" - {ingredient.get('description')}"
+
+                        ingredients_info.append(ingredient_text)
+                    # 获取菜品烹饪步骤
+                    steps_query = """
+                    MATCH (r:Recipe {nodeId: $recipe_id})-[c:CONTAINS_STEP]->(s:CookingStep)
+                    RETURN s.name as name, s.description as description,
+                           s.stepNumber as stepNumber, s.methods as methods,
+                           s.tools as tools, s.timeEstimate as timeEstimate,
+                           c.stepOrder as stepOrder
+                    ORDER BY COALESCE(c.stepOrder, s.stepNumber, 999)
+                    """
+                    steps_result = session.run(steps_query, {"recipe_id": recipe_id})
+                    steps_info = []
+                    for step in steps_result:
+                        step_text = f"步骤: {step.get("name")}"
+                        if step.get("description"):
+                            step_text += f"\n 描述:{step.get('description')}"
+                        if step.get("methods"):
+                            step_text += f"\n 方法:{step.get('methods')}"
+                        if step.get("tools"):
+                            step_text += f"\n 工具:{step.get('tools')}"
+                        if step.get("timeEstimate"):
+                            step_text += f"\n 时间:{step.get('timeEstimate')}"
+
+                        steps_info.append(step_text)
+
+                    content_parts = [f"#{recipe_name}"]
+                    # 添加菜谱基本信息
+                    if recipe.properties.get("description"):
+                        content_parts.append(f"\n## 菜品描述\n{recipe.properties['description']}")
+
+                    if recipe.properties.get("cuisineType"):
+                        content_parts.append(f"\n菜系: {recipe.properties['cuisineType']}")
+
+                    if recipe.properties.get("difficulty"):
+                        content_parts.append(f"难度: {recipe.properties['difficulty']}星")
+
+                    if recipe.properties.get("preTime") or recipe.properties.get("cookTime") :
+
+                        time_info = []
+                        if recipe.properties.get("prepTime"):
+                            time_info.append(f"准备时间: {recipe.properties['prepTime']}")
+                        if recipe.properties.get("cookTime"):
+                            time_info.append(f"烹饪时间: {recipe.properties['cookTime']}")
+                        content_parts.append(f"\n时间信息: {', '.join(time_info)}")
+                    if recipe.properties.get("servings"):
+                        content_parts.append(f"\n份量: {recipe.properties['servings']}")
+
+                    # 添加食材信息
+                    if ingredients_info:
+                        content_parts.append("\n## 所需食材")
+                        for i, ingredient in enumerate(ingredients_info, 1):
+                            content_parts.append(f"{i}. {ingredient}")
+
+                    if steps_info:
+                        content_parts.append("\n## 制作步骤")
+                        for i, step in enumerate(steps_info, 1):
+                            content_parts.append(f"\n### 第{i}步\n{step}")
+
+                    # 添加标签信息
+                    if recipe.properties.get("tags"):
+                        content_parts.append(f"\n## 标签\n{recipe.properties['tags']}")
+
+
+                    full_content = "\n".join(content_parts)
+
+                    doc = Document(
+                        page_content= full_content,
+                        metadata={
+                                                        "node_id": recipe_id,
+                            "recipe_name": recipe_name,
+                            "node_type": "Recipe",
+                            "category": recipe.properties.get("category", "未知"),
+                            "cuisine_type": recipe.properties.get("cuisineType", "未知"),
+                            "difficulty": recipe.properties.get("difficulty", 0),
+                            "prep_time": recipe.properties.get("prepTime", ""),
+                            "cook_time": recipe.properties.get("cookTime", ""),
+                            "servings": recipe.properties.get("servings", ""),
+                            "ingredients_count": len(ingredients_info),
+                            "steps_count": len(steps_info),
+                            "doc_type": "recipe",
+                            "content_length": len(full_content)
+                        }
+                    )
+                    documents.append( doc)
+                except Exception as e:
+                    logger.warning(f"构建菜谱文档失败 {recipe_name} (ID: {recipe_id}): {e}")
+                    continue
+
+        self.documents = documents
+        logger.info(f"构建菜谱文档完成，共 {len(documents)} 个")
+        return documents
+
+    def chunk_documents(self, chunk_size: int = 500, chunk_overlap: int = 50) -> List[Document]:
+        """
+        对文档进行分块处理
+        """
+        logger.info("开始对文档进行分块处理...")
+
+        if not documents:
+            raise ValueError("请先构建文档")
+
+        chunks = []
+        chunk_id = 0
+        for doc in self.documents:
+
+            content = doc.page_content
+
+            # 简单的分块处理
+            if len(content)<= chunk_size:
+                chunk = Document(
+                    page_content=content,
+                    metadata={
+                        **doc.metadata,
+                        "chunk_id": f"{doc.metadata['node_id']}_chunk_{chunk_id}",
+                        "parent_id": doc.metadata["node_id"],
+                        "chunk_index": 0,
+                        "total_chunks": 1,
+                        "chunk_size": len(content),
+                        "doc_type": "chunk"
+                    }
+                )
+                chunks.append(chunk)
+                chunk_id += 1
+            else:
+                # 按照章节处理
+                sections = content.split("\n##")
+                if len(sections) <=1 :
+                    # 没有二级标题，按长度强制分块
+                    total_chunks = (len(content)-1)//(chunk_size-chunk_overlap)+1
+
+                    for i in range(total_chunks):
+                        start = i * (chunk_size-chunk_overlap)
+                        end = min(start + chunk_size, len(content))
+
+                        chunk_content  = content[start:end]
+                        chunk = Document(
+                            page_content=chunk_content,
+                            metadata={
+                                **doc.metadata,
+                                "chunk_id": f"{doc.metadata['node_id']}_chunk_{chunk_id}",
+                                "parent_id": doc.metadata["node_id"],
+                                "chunk_index": i,
+                                "total_chunks": total_chunks,
+                                "chunk_size": len(chunk_content),
+                                "doc_type": "chunk"
+                            }
+                        )
+                        chunks.append(chunk)
+                        chunk_id+=1
+                else:
+                    # 按照章节分块
+                    total_chunks = len(sections)
+
+                    for i,section in enumerate(sections):
+                        if i == 0:
+                            # 第一部分包含标题
+                            chunk_content = section
+                        else:
+                            # 其他部分添加标题
+                            chunk_content = f"## {section}"
+
+                        chunk = Document(
+                            page_content=chunk_content,
+                            metadata={
+                                **doc.metadata,
+                                "chunk_id": f"{doc.metadata['node_id']}_chunk_{chunk_id}",
+                                "parent_id": doc.metadata["node_id"],
+                                "chunk_index": i,
+                                "total_chunks": total_chunks,
+                                "chunk_size": len(chunk_content),
+                                "doc_type": "chunk",
+                                "section_title": section.split('\n')[0] if i > 0 else "主标题"
+                            }
+                        )
+                        chunks.append(chunk)
+                        chunk_id += 1
+        self.chunks = chunks
+        logger.debug(f"文档分块完成，文档分块数: {len(chunks)}")
+        return chunks
+
+    def get_statistics(self) -> Dict[str, Any]:
+        """
+        获取数据统计信息
+
+        Returns:
+            统计信息字典
+        """
+        stats = {
+            'total_recipes': len(self.recipes),
+            'total_ingredients': len(self.ingredients),
+            'total_cooking_steps': len(self.cooking_steps),
+            'total_documents': len(self.documents),
+            'total_chunks': len(self.chunks)
+        }
+
+        if self.documents:
+            # 分类统计
+            categories = {}
+            cuisines = {}
+            difficulties = {}
+
+            for doc in self.documents:
+                category = doc.metadata.get('category', '未知')
+                categories[category] = categories.get(category, 0) + 1
+
+                cuisine = doc.metadata.get('cuisine_type', '未知')
+                cuisines[cuisine] = cuisines.get(cuisine, 0) + 1
+
+                difficulty = doc.metadata.get('difficulty', 0)
+                difficulties[str(difficulty)] = difficulties.get(str(difficulty), 0) + 1
+
+            stats.update({
+                'categories': categories,
+                'cuisines': cuisines,
+                'difficulties': difficulties,
+                'avg_content_length': sum(doc.metadata.get('content_length', 0) for doc in self.documents) / len(
+                    self.documents),
+                'avg_chunk_size': sum(chunk.metadata.get('chunk_size', 0) for chunk in self.chunks) / len(
+                    self.chunks) if self.chunks else 0
+            })
+
+        return stats
     def close(self):
         """关闭Neo4j连接"""
         if hasattr(self.neo4j_config, 'driver') and self.neo4j_config.driver:

@@ -1,4 +1,5 @@
 import logging
+from typing import Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -24,4 +25,17 @@ class IntelligentQueryRouter:
             "graph_retrieval_count":0,
             "combined_count":0,
             "total_query":0
+        }
+
+    def get_route_statistics(self) -> Dict[str, Any]:
+        """获取路由统计信息"""
+        total = self.router_status["total_queries"]
+        if total == 0:
+            return self.router_status
+
+        return {
+            **self.router_status,
+            "traditional_ratio": self.router_status["traditional_count"] / total,
+            "graph_rag_ratio": self.router_status["graph_rag_count"] / total,
+            "combined_ratio": self.router_status["combined_count"] / total
         }

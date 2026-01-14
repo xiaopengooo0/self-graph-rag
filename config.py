@@ -21,7 +21,7 @@ class Neo4jConfig:
     uri:str = os.getenv("NEO4J_URI", "localhost") # 数据库URI
     user:str = os.getenv("NEO4J_USER", "neo4j") # 数据库用户名
     password:str = os.getenv("NEO4J_PASSWORD", "") # 数据库密码
-    driver:None ="" # Neo4j驱动
+    driver = None # Neo4j驱动
     database:str = os.getenv("NEO4J_DATABASE", "neo4j") # 数据库名称
 
 
@@ -72,18 +72,11 @@ class GraphRAGConfig:
 
     @classmethod
     def from_dict(cls, config_dict:Dict[str, Any]) -> "GraphRAGConfig":
-        return cls(**config_dict)
+        return cls()
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__
 
-
-# 初始化时加载环境变量
-try:
-    from dotenv import load_dotenv
-    load_dotenv()
-except ImportError:
-    pass
 
 
 DEFAULT_CONFIG = GraphRAGConfig()
