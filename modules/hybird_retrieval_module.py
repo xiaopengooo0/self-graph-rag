@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from dataclasses import dataclass
 from typing import List, Dict, Any
 
@@ -195,7 +196,7 @@ class HybridRetrievalModule:
         seen_node = set()
         unique_res =  []
 
-        for result in sorted(all_results, key=lambda x: x.score, reverse=True):
+        for result in sorted(all_results, key=lambda x: x.relevance_score, reverse=True):
             if result.node_id not in seen_node:
                 unique_res.append(result)
                 seen_node.add(result.node_id)
@@ -265,13 +266,21 @@ class HybridRetrievalModule:
 
         try:
             response = self.llm_client.chat.completions.create(
-                model=self.config.llm_model,
+                model=self.config.llm_config.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=500
             )
 
-            result = json.loads(response.choices[0].message.content.strip())
+            result = response.choices[0].message.content.strip()
+
+            if result.__contains__("<think>"):
+                result = result.split("</think>")[1]
+                # 从代码块中提取JSON
+                json_str = re.search(r'```json(.*?)```', result, re.DOTALL).group(1)
+                result = json.loads(json_str)
+
+
             entity_keywords = result.get("entity_keywords", [])
             topic_keywords = result.get("topic_keywords", [])
 

@@ -5,7 +5,7 @@ from typing import Dict, Any
 
 from dotenv import load_dotenv
 os.environ["HF_ENDPOINT"] = "https://hf-mirror.com"
-os.environ["HF_TOKEN"]  ="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"
+os.environ["HF_TOKEN"]  ="***"
 os.environ["HF_HOME"] = os.path.join(r"E:\dev\huggingface")
 
 

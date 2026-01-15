@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Dict, Any, Tuple, List
@@ -42,9 +43,9 @@ class IntelligentQueryRouter:
 
         self.router_status = {
             "traditional_count":0,
-            "graph_retrieval_count":0,
+            "graph_rag_count":0,
             "combined_count":0,
-            "total_query":0
+            "total_queries":0
         }
 
     def get_route_statistics(self) -> Dict[str, Any]:
@@ -133,9 +134,29 @@ class IntelligentQueryRouter:
                 """
 
         try:
-            response = self.llm_client.invoke(analysis_prompt)
-            import json
-            result = json.loads(response.content.strip())
+            response = self.llm_client.chat.completions.create(
+                model=self.config.llm_config.model_name,
+                messages=[{"role": "user", "content": analysis_prompt}],
+                temperature=0.1,
+                max_tokens=800
+            )
+            
+            # 提取响应内容
+            result = response.choices[0].message.content.strip()
+
+            if result.__contains__("<think>"):
+                result = result.split("</think>")[1]
+                # 从代码块中提取JSON
+                json_str = re.search(r'```json(.*?)```', result, re.DOTALL).group(1)
+                result = json.loads(json_str)
+
+
+
+            
+            # 尝试从响应中提取JSON部分
+            # result = self._extract_json_from_response(content)
+            
+            logger.info(f"LLM路由分析结果: {result}")
 
             analysis = QueryAnalysis(
                 query_complexity=result.get("query_complexity", 0.5),

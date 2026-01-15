@@ -409,7 +409,7 @@ class GraphRAGRetrievalModule:
 
         try:
             response = self.llm_client.chat.completions.create(
-                model=self.config.llm_model,
+                model=self.config.llm_config.model_name,
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.1,
                 max_tokens=1000
